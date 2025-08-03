@@ -18,9 +18,7 @@ export function useUbikeMap(
 
     return {
         loadMap: controller.loadMap.bind(controller),
-        init: controller.init.bind(controller),
         destroy: controller.destroy.bind(controller),
-        waitUntilReady: () => controller.init(),
         updateRoute: controller.updateRoute.bind(controller)
     }
 }

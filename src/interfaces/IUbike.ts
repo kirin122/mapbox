@@ -1,4 +1,5 @@
 export interface IUbikeRaw {
+    sno: string // 站點ID
     sna: string // 站名
     sbi: number // 可借
     bemp: number // 可還
@@ -13,6 +14,7 @@ export interface IUbikeRaw {
 }
 
 export interface IUbikeFeature {
+    id?: string,
     type: 'Feature'
     geometry: {
         type: 'Point'

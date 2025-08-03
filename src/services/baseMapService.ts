@@ -8,6 +8,9 @@ export class BaseMapService implements IBaseMapService {
 
     protected map!: mapboxgl.Map;
 
+    // 移除綁定事件用
+    private eventListeners: { type: string; handler: (...args: any[]) => void }[] = []
+
     /**
      * 默認的地圖初始化選項
      * @param container 
@@ -65,15 +68,24 @@ export class BaseMapService implements IBaseMapService {
             }
 
             if (options.onHover) {
+                const handler = (e: mapboxgl.MapMouseEvent) => options.onHover!(e);
                 this.map.on("mousemove", (e) => options.onHover!(e));
+                this.eventListeners.push({ type: "mousemove", handler });
+
             }
 
             if (options.onClick) {
+                const handler = (e: mapboxgl.MapMouseEvent) => options.onClick!(e);
                 this.map.on("click", (e) => options.onClick!(e));
+                this.eventListeners.push({ type: "click", handler });
+
             }
 
             if (options.onMapMoveEnd) {
-                this.map.on("moveend", (e) => options.onMapMoveEnd!());
+                const handler = () => options.onMapMoveEnd!();
+                this.map.on("moveend", () => options.onMapMoveEnd!());
+                this.eventListeners.push({ type: "moveend", handler });
+
             }
 
             if (options.onLoad) {
@@ -94,6 +106,13 @@ export class BaseMapService implements IBaseMapService {
      * 銷毀地圖實例
      */
     public destroyMap(): void {
-        this.map?.remove();
+        if (!this.map) return;
+
+        // 移除所有綁定事件
+        for (const { type, handler } of this.eventListeners) {
+            this.map.off(type as any, handler);
+        }
+        this.eventListeners = [];
+        this.map.remove();
     }
 }
