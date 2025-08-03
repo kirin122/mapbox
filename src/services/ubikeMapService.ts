@@ -5,6 +5,7 @@ import type { IUbikeMapService } from '../interfaces/IUbikeMapService'
 import type { IUbikeFeature, IUbikeFeatureCollection } from '../interfaces/IUbike'
 import type { FeatureCollection, LineString, Geometry } from 'geojson'
 import type { Ref } from 'vue'
+import { BaseMapService } from './baseMapService'
 
 /**
  * 建立標準 popup
@@ -21,10 +22,7 @@ function createPopup(label: string): mapboxgl.Popup {
     }).setText(label)
 }
 
-export class UbikeMapService implements IUbikeMapService {
-    // 地圖實例
-    private map!: mapboxgl.Map
-
+export class UbikeMapService extends BaseMapService implements IUbikeMapService {
     // 所有站點與目前顯示資料
     private ubikeData: IUbikeFeature[] = []
     private allUbike: IUbikeFeatureCollection | null = null
@@ -48,6 +46,7 @@ export class UbikeMapService implements IUbikeMapService {
         selectedUbikeName: Ref<string>,
         selectedUbikeInfo: Ref<{ sbi: number; bemp: number } | null>
     ) {
+        super()
         this.selectedUbike = selectedUbike
         this.start = start
         this.end = end
@@ -60,8 +59,9 @@ export class UbikeMapService implements IUbikeMapService {
      * @param e 
      */
     private handleHover = (e: mapboxgl.MapMouseEvent): void => {
-        const features = this.map.queryRenderedFeatures(e.point, { layers: ['ubike-layer'] })
-        this.map.getCanvas().style.cursor = features.length > 0 ? 'pointer' : 'default'
+        const map = this.getMapInstance()
+        const features = map.queryRenderedFeatures(e.point, { layers: ['ubike-layer'] })
+        map.getCanvas().style.cursor = features.length > 0 ? 'pointer' : 'default'
 
         if (features.length > 0) {
             const raw = features[0] as any
@@ -75,7 +75,7 @@ export class UbikeMapService implements IUbikeMapService {
                     closeButton: false,
                     closeOnClick: false,
                     className: 'hover-popup'
-                }).setLngLat(coords).setHTML(content).addTo(this.map)
+                }).setLngLat(coords).setHTML(content).addTo(map)
             } else {
                 this.hoverPopup.setLngLat(coords).setHTML(content)
             }
@@ -90,8 +90,46 @@ export class UbikeMapService implements IUbikeMapService {
      * @param e 
      */
     private handleClick = (e: mapboxgl.MapMouseEvent): void => {
-        const features = this.map.queryRenderedFeatures(e.point, { layers: ['ubike-layer'] })
-        if (!features.length) this.map.getCanvas().style.cursor = 'default'
+        const raw = e.features?.[0]
+            || this.getMapInstance().queryRenderedFeatures(e.point, { layers: ['ubike-layer'] })[0]
+        if (!raw || raw.geometry.type !== 'Point') return
+
+        const coords = raw.geometry.coordinates as [number, number]
+        const props = raw.properties as { name: string; sbi: number; bemp: number }
+
+        if (coords && props && this.selectedUbike && this.selectedUbikeName && this.selectedUbikeInfo) {
+            this.selectedUbike.value = coords
+            this.selectedUbikeName.value = props.name
+            this.selectedUbikeInfo.value = {
+                sbi: props.sbi,
+                bemp: props.bemp
+            }
+            this.updateRoute()
+        }
+
+        const features = this.getMapInstance().queryRenderedFeatures(e.point, { layers: ['ubike-layer'] })
+        if (!features.length) this.getMapInstance().getCanvas().style.cursor = 'default'
+    }
+
+
+    /**
+     * 更新：目前畫面內的 Ubike 站
+     */
+    private async updateUbikeInView(): Promise<void> {
+        const map = this.getMapInstance()
+        const center = map.getCenter()
+        await this.fetchUbikeData([center.lng, center.lat])
+
+        const bounds = this.map.getBounds()
+        const visibleStations: FeatureCollection<Geometry> = {
+            type: 'FeatureCollection',
+            features: this.ubikeData.filter(({ geometry: { coordinates: [lng, lat] } }) => (
+                lat < bounds!.getNorth() && lat > bounds!.getSouth() &&
+                lng < bounds!.getEast() && lng > bounds!.getWest()
+            ))
+        }
+        const source = this.map.getSource('ubike') as mapboxgl.GeoJSONSource | undefined
+        source?.setData(visibleStations)
     }
 
     /**
@@ -212,43 +250,24 @@ export class UbikeMapService implements IUbikeMapService {
     }
 
     /**
-     * 初始化預載指定位置附近站點
-     */
-    public async init(): Promise<void> {
-        await this.fetchUbikeData(this.start)
-    }
-
-    /**
-     * 更新：目前畫面內的 Ubike 站
-     */
-    public async updateUbikeInView(): Promise<void> {
-        const center = this.map.getCenter()
-        await this.fetchUbikeData([center.lng, center.lat])
-
-        const bounds = this.map.getBounds()
-        const visibleStations: FeatureCollection<Geometry> = {
-            type: 'FeatureCollection',
-            features: this.ubikeData.filter(({ geometry: { coordinates: [lng, lat] } }) => (
-                lat < bounds!.getNorth() && lat > bounds!.getSouth() &&
-                lng < bounds!.getEast() && lng > bounds!.getWest()
-            ))
-        }
-        const source = this.map.getSource('ubike') as mapboxgl.GeoJSONSource | undefined
-        source?.setData(visibleStations)
-    }
-
-    /**
      * 找出最近的 Ubike 站
      * @param target 
      * @param requireAvailable 
      * @returns 
      */
-    public findNearestUbike(target: [number, number], requireAvailable = true): IUbikeFeature | null {
+    private findNearestUbike(target: [number, number], requireAvailable = true): IUbikeFeature | null {
         return this.ubikeData.reduce<{ nearest: IUbikeFeature | null, dist: number }>((acc, station) => {
             if (requireAvailable && station.properties.sbi <= 0) return acc
             const dist = UbikeMapService.haversine(target, [station.geometry.coordinates[0], station.geometry.coordinates[1]])
             return dist < acc.dist ? { nearest: station, dist } : acc
         }, { nearest: null, dist: Infinity }).nearest
+    }
+
+    /**
+     * 初始化預載指定位置附近站點
+     */
+    public async init(): Promise<void> {
+        await this.fetchUbikeData(this.start)
     }
 
     /**
@@ -311,26 +330,15 @@ export class UbikeMapService implements IUbikeMapService {
      * 載入地圖+初始化圖層事件
      * @param container 
      * @param start 
-     * @param onMapReady 
      * @param options 
      * @returns 
      */
     public async loadMap(
         container: HTMLElement,
-        start: [number, number],
-        onMapReady: () => Promise<void>,
-        options?: {
-            mapReady?: { value: boolean },
-            selectedUbike?: Ref<[number, number] | null>,
-            selectedUbikeName?: Ref<string>,
-            selectedUbikeInfo?: Ref<{ sbi: number; bemp: number } | null>
-        }
+        start: [number, number]
     ): Promise<void> {
-        if (options?.mapReady?.value) return
 
-        mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
-
-        this.map = new mapboxgl.Map({
+        const baseOptions = {
             container,
             style: {
                 version: 8,
@@ -347,61 +355,57 @@ export class UbikeMapService implements IUbikeMapService {
             },
             center: start,
             zoom: 14
-        })
+        }
 
-        this.map.addControl(new mapboxgl.NavigationControl())
-
-        this.map.on('load', async () => {
-            this.map.addSource('ubike', {
+        const addSourceData = {
+            name: 'ubike',
+            data: {
                 type: 'geojson',
-                data: { type: 'FeatureCollection', features: [] }
-            })
+                data: { type: 'FeatureCollection', features: [] } as FeatureCollection<Geometry>
+            }
+        }
 
-            this.map.addLayer({
-                id: 'ubike-layer',
-                type: 'circle',
-                source: 'ubike',
-                paint: {
-                    'circle-radius': 8,
-                    'circle-color': '#ffef02',
-                    'circle-opacity': 0.7
-                }
-            })
+        const addLayerOptions = {
+            id: 'ubike-layer',
+            type: 'circle',
+            source: 'ubike',
+            paint: {
+                'circle-radius': 8,
+                'circle-color': '#ffef02',
+                'circle-opacity': 0.7
+            }
+        }
 
-            this.map.on('click', 'ubike-layer', (e) => {
-                const raw = e.features?.[0] as any
-                const coords = raw.geometry.coordinates as [number, number]
-                const props = raw.properties as { name: string; sbi: number; bemp: number }
-                if (coords && props && options?.selectedUbike && options?.selectedUbikeName && options?.selectedUbikeInfo) {
-                    options.selectedUbike.value = coords
-                    options.selectedUbikeName.value = props.name
-                    options.selectedUbikeInfo.value = {
-                        sbi: props.sbi,
-                        bemp: props.bemp
-                    }
-                    this.updateRoute()
-                }
-            })
-
-            this.map.on('mousemove', this.handleHover)
-            this.map.on('click', this.handleClick)
-            this.map.on('moveend', () => this.updateUbikeInView())
-
-            await onMapReady()
+        const onLoad = async () => {
             await this.updateUbikeInView()
             await this.updateRoute()
+        }
 
-            if (options?.mapReady) options.mapReady.value = true
-        })
+        /** 
+         * NOTE: 
+         * 這裡的 this 指向 UbikeMapService 實例
+         * 這樣可以直接使用 this.getMapInstance() 取得地圖實例
+         */
+        this.initMap(
+            container,
+            start,
+            {
+                baseOptions: baseOptions,
+                addSourceData: addSourceData,
+                addLayerOptions: addLayerOptions,
+                onLoad: onLoad,
+                onClick: this.handleClick.bind(this),
+                onHover: this.handleHover.bind(this),
+                onMapMoveEnd: this.updateUbikeInView.bind(this)
+            }
+        )
     }
 
     /**
      * GC
      */
     public destroy(): void {
-        if (this.map) {
-            this.map.remove()
-        }
+        this.destroyMap
         this.clearMarkers()
         this.hoverPopup?.remove()
         this.hoverPopup = null

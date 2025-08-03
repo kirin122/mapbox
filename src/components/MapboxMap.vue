@@ -23,14 +23,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onBeforeUnmount, watchEffect, nextTick } from 'vue'
+import { ref, onBeforeUnmount, nextTick, onMounted } from 'vue'
 import { useUbikeMap } from '../composables/useUbikeMap'
 import { useMediaQuery } from '../composables/useMediaQuery'
 
 const isLoading = ref(true)
-
 const mapContainer = ref<HTMLElement | null>(null)
-const mapReady = ref(false)
 
 const start: [number, number] = [121.56611, 25.04111]
 const end: [number, number] = [121.562954, 25.032697]
@@ -43,19 +41,12 @@ const selectedUbike = ref<[number, number] | null>(null)
 const selectedUbikeName = ref('搜尋中..')
 const selectedUbikeInfo = ref<{ sbi: number; bemp: number } | null>(null)
 const isMobile = useMediaQuery('(max-width: 768px)')
-const { loadMap, init, destroy } = useUbikeMap(selectedUbike, start, end, selectedUbikeName, selectedUbikeInfo)
+const { loadMap, destroy } = useUbikeMap(selectedUbike, start, end, selectedUbikeName, selectedUbikeInfo)
 
-watchEffect(async () => {
-    if (!mapContainer.value || mapReady.value) return
+onMounted(async () => {
+    isLoading.value = true
     await nextTick()
-    await loadMap(mapContainer.value, midpoint, init,
-        {
-            mapReady,
-            selectedUbike,
-            selectedUbikeName,
-            selectedUbikeInfo
-        }
-    )
+    await loadMap(mapContainer.value!, midpoint)
     isLoading.value = false
 })
 
