@@ -405,7 +405,7 @@ export class UbikeMapService extends BaseMapService implements IUbikeMapService 
      * GC
      */
     public destroy(): void {
-        this.destroyMap
+        this.destroyMap()
         this.clearMarkers()
         this.hoverPopup?.remove()
         this.hoverPopup = null
