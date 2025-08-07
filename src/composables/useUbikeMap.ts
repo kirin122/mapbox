@@ -3,8 +3,8 @@ import type { Ref } from 'vue'
 
 export function useUbikeMap(
     selectedUbike: Ref<[number, number] | null>,
-    start: [number, number],
-    end: [number, number],
+    start: Ref<[number, number]>,
+    end: Ref<[number, number]>,
     selectedUbikeName: Ref<string>,
     selectedUbikeInfo: Ref<{ sbi: number; bemp: number } | null>
 ) {
@@ -19,6 +19,7 @@ export function useUbikeMap(
     return {
         loadMap: controller.loadMap.bind(controller),
         destroy: controller.destroy.bind(controller),
-        updateRoute: controller.updateRoute.bind(controller)
+        updateRoute: controller.updateRoute.bind(controller),
+        goToStartOrEnd: controller.goToStartOrEnd.bind(controller),
     }
 }

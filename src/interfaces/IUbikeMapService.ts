@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 
 export interface IUbikeMapService {
-    updateRoute(): Promise<void>
+    updateRoute(start: [number, number]): Promise<void>
 
     loadMap(
         container: HTMLElement,

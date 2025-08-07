@@ -1,7 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import type { Ref } from "vue";
 import { getDirections } from "../api/directions";
-import { getAllUbike, getUbikeNearby } from "../api/ubike";
+import { getAllUbike } from "../api/ubike";
 import { BaseMapService } from "./baseMapService";
 import { getDistanceInMeters } from "../utils/geo";
 import type { IUbikeMapService } from "../interfaces/IUbikeMapService";
@@ -65,15 +65,15 @@ export class UbikeMapService
 
     // 狀態參考資料
     private selectedUbike: Ref<[number, number] | null>;
-    private start: [number, number];
-    private end: [number, number];
+    private start: Ref<[number, number]>;
+    private end: Ref<[number, number]>;
     private selectedUbikeName: Ref<string>;
     private selectedUbikeInfo: Ref<{ sbi: number; bemp: number } | null>;
 
     constructor(
         selectedUbike: Ref<[number, number] | null>,
-        start: [number, number],
-        end: [number, number],
+        start: Ref<[number, number]>,
+        end: Ref<[number, number]>,
         selectedUbikeName: Ref<string>,
         selectedUbikeInfo: Ref<{ sbi: number; bemp: number } | null>
     ) {
@@ -84,8 +84,6 @@ export class UbikeMapService
         this.selectedUbikeName = selectedUbikeName;
         this.selectedUbikeInfo = selectedUbikeInfo;
     }
-
-    private ubikeFeatureMap: Map<string, IUbikeFeature> = new Map();
 
     /**
      * Hover：顯示 popup
@@ -161,7 +159,7 @@ export class UbikeMapService
         this.selectedUbike.value = [lng, lat];
         this.selectedUbikeName.value = name;
         this.selectedUbikeInfo.value = { sbi, bemp };
-        this.updateRoute(true);
+        this.updateRoute(this.start.value);
     };
 
     /**
@@ -170,21 +168,13 @@ export class UbikeMapService
     private async updateUbikeInView() {
         try {
             const map = this.getMapInstance();
-            const center = map.getCenter();
             const bounds = map.getBounds()!;
-
-            // 1km 內
-            const nearby = await getUbikeNearby(
-                [center.lng, center.lat],
-                1000,
-                this.allUbikeData!
-            );
-            this.ubikeData = nearby.features;
+            const allUbike = this.allUbikeData?.features || [];
 
             // 過濾
             const visibleStations: FeatureCollection<Geometry> = {
                 type: "FeatureCollection",
-                features: this.ubikeData.filter(
+                features: allUbike.filter(
                     ({
                         geometry: {
                             coordinates: [lng, lat],
@@ -204,6 +194,7 @@ export class UbikeMapService
                 | mapboxgl.GeoJSONSource
                 | undefined;
             ubikeSource?.setData(visibleStations);
+            this.ubikeData = visibleStations.features as IUbikeFeature[];
         } catch (err) {
             this.handleError(err);
         }
@@ -279,7 +270,7 @@ export class UbikeMapService
 
     /**
      * 設定：起點、中途、終點
-     * @param start
+     * @param start.value
      * @param mid
      * @param end
      * @param destinationName
@@ -290,30 +281,22 @@ export class UbikeMapService
         mid,
         end,
         destinationName,
-        onlyChangeUbike = false,
     }: {
         start: [number, number];
         mid: [number, number];
         end: [number, number];
         destinationName: string;
-        onlyChangeUbike?: boolean;
     }) {
         try {
             const map = this.getMapInstance();
             const midMarker = this.createMarker(mid, "#ffef02");
 
-            // 只改變中途
-            if (onlyChangeUbike) {
-                this.clearMarkers(true);
-                this.currentMarkers[1] = midMarker;
-            } else {
-                this.clearMarkers();
-                const startMarker = this.createMarker(start, "#f87171", "目前位置");
-                const endMarker = this.createMarker(end, "#0ca5e9", destinationName);
-                startMarker.togglePopup();
-                endMarker.togglePopup();
-                this.currentMarkers.push(startMarker, midMarker, endMarker);
-            }
+            this.clearMarkers();
+            const startMarker = this.createMarker(start, "#f87171", "起點");
+            const endMarker = this.createMarker(end, "#0ca5e9", destinationName);
+            startMarker.togglePopup();
+            endMarker.togglePopup();
+            this.currentMarkers.push(startMarker, midMarker, endMarker);
 
             this.midStationPopup = createPopup({
                 offset: 0,
@@ -345,7 +328,8 @@ export class UbikeMapService
         let nearestStation: IUbikeFeature | null = null;
         let shortestDistance = Infinity;
 
-        for (const station of this.ubikeData) {
+        const stations = this.allUbikeData!.features;
+        for (const station of stations) {
             const { sbi } = station.properties;
             const [lng, lat] = station.geometry.coordinates;
 
@@ -385,49 +369,63 @@ export class UbikeMapService
     /**
      * 重新計算路線
      */
-    public async updateRoute(onlyChangeUbike?: boolean) {
+    public async updateRoute(start: [number, number], isFirst = false) {
         try {
             let mid: [number, number];
             let nearest: IUbikeFeature | null = null;
 
-            if (onlyChangeUbike) {
-                mid = this.selectedUbike.value!;
-                nearest =
-                    this.allUbikeData!.features.find(
-                        (s) =>
-                            s.geometry.coordinates[0] === mid[0] &&
-                            s.geometry.coordinates[1] === mid[1]
-                    ) || null;
-            } else {
-                nearest = this.findNearestUbike(this.start);
+            await this.updateUbikeInView();
+
+            if (isFirst) {
+                nearest = this.findNearestUbike(start);
                 if (!nearest) return;
+
                 mid = [
                     nearest.geometry.coordinates[0],
                     nearest.geometry.coordinates[1],
                 ];
+
+                this.selectedUbike.value = mid;
                 this.selectedUbikeName.value = nearest.properties.name;
                 this.selectedUbikeInfo.value = {
                     sbi: nearest.properties.sbi,
                     bemp: nearest.properties.bemp,
                 };
+            } else {
+                // 使用者選擇
+                if (!this.selectedUbike.value) return;
+                mid = this.selectedUbike.value;
             }
 
             await this.setMarkers({
-                start: this.start,
+                start: this.start.value,
                 mid,
-                end: this.end,
-                destinationName: "目的地",
-                onlyChangeUbike,
+                end: this.end.value,
+                destinationName: "終點"
             });
         } catch (err) {
             this.handleError(err);
         }
     }
 
+
+    /**
+     * 將地圖畫面移動到起點位置
+     */
+    public goToStartOrEnd(isEnd?: boolean) {
+        const map = this.getMapInstance()
+        const [lng, lat] = isEnd ? this.end.value : this.start.value
+
+        map.flyTo({
+            center: [lng, lat],
+            zoom: 14,
+            essential: true,
+        })
+    }
+
     /**
      * 載入地圖
      * @param container
-     * @param start
      * @param options
      */
     public async loadMap(container: HTMLElement, center: [number, number]) {
@@ -478,7 +476,7 @@ export class UbikeMapService
         const onLoad = async () => {
             await this.getUbikeData();
             await this.updateUbikeInView();
-            await this.updateRoute();
+            await this.updateRoute(this.start.value, true);
         };
 
         /**
